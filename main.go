@@ -59,7 +59,8 @@ func load() (*Config, error) {
 }
 
 func archive(account *Account, dir string) error {
-	err := os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, account.Username)
+	err := os.MkdirAll(path, 0755)
 	if err != nil {
 		if !os.IsExist(err) {
 			return fmt.Errorf("mkdir: %w", err)
@@ -99,21 +100,20 @@ func archive(account *Account, dir string) error {
 			continue
 		}
 
+		mailboxpath := filepath.Join(path, ld.Mailbox)
+		err = os.MkdirAll(mailboxpath, 0755)
+		if err != nil {
+			if !os.IsExist(err) {
+				return fmt.Errorf("mkdir: %w", err)
+			}
+		}
+
 		sd, err := client.Select(ld.Mailbox, nil).Wait()
 		if err != nil {
 			slog.Error("select error.", "username", account.Username, "mailbox", ld.Mailbox, "err", err)
 			return err
 		}
 		slog.Info("select success.", "username", account.Username, "mailbox", ld.Mailbox, "messages", sd.NumMessages)
-
-		if sd.NumMessages > 0 {
-			err = os.MkdirAll(filepath.Join(dir, ld.Mailbox), 0755)
-			if err != nil {
-				if !os.IsExist(err) {
-					return fmt.Errorf("mkdir: %w", err)
-				}
-			}
-		}
 
 		var n uint32 = account.Seqnum
 		if n == 0 {
@@ -158,7 +158,7 @@ func archive(account *Account, dir string) error {
 				}
 				slog.Info("fetch success.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
 
-				name := filepath.Join(dir, ld.Mailbox, fmt.Sprintf("%d-%s.eml", uid, subject))
+				name := filepath.Join(mailboxpath, fmt.Sprintf("%d-%s.eml", uid, subject))
 				err = os.WriteFile(name, body, 0644)
 				if err != nil {
 					slog.Error("write file error.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body), "err", err)
