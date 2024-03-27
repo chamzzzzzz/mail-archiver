@@ -8,6 +8,8 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -20,7 +22,6 @@ type Account struct {
 	Password string
 	Include  []string
 	Exclude  []string
-	Seqnum   uint32
 }
 
 type Config struct {
@@ -100,6 +101,13 @@ func archive(account *Account, dir string) error {
 			continue
 		}
 
+		sd, err := client.Select(ld.Mailbox, nil).Wait()
+		if err != nil {
+			slog.Error("select error.", "username", account.Username, "mailbox", ld.Mailbox, "err", err)
+			return err
+		}
+		slog.Info("select success.", "username", account.Username, "mailbox", ld.Mailbox, "messages", sd.NumMessages)
+
 		mailboxpath := filepath.Join(path, ld.Mailbox)
 		err = os.MkdirAll(mailboxpath, 0755)
 		if err != nil {
@@ -108,26 +116,40 @@ func archive(account *Account, dir string) error {
 			}
 		}
 
-		sd, err := client.Select(ld.Mailbox, nil).Wait()
+		ignoreuids := make(map[imap.UID]bool)
+		entries, err := os.ReadDir(mailboxpath)
 		if err != nil {
-			slog.Error("select error.", "username", account.Username, "mailbox", ld.Mailbox, "err", err)
 			return err
 		}
-		slog.Info("select success.", "username", account.Username, "mailbox", ld.Mailbox, "messages", sd.NumMessages)
-
-		var n uint32 = account.Seqnum
-		if n == 0 {
-			n = 10
-		}
-		for i := uint32(1); i <= sd.NumMessages; i += n {
-			j := i + n
-			if j >= sd.NumMessages {
-				j = sd.NumMessages
-			} else {
-				j = j - 1
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
 			}
-			var seq imap.SeqSet
-			seq.AddRange(i, j)
+			parts := strings.Split(entry.Name(), "-")
+			if len(parts) >= 2 {
+				num, err := strconv.ParseUint(parts[0], 10, 32)
+				if err == nil && num > 0 {
+					ignoreuids[imap.UID(num)] = true
+					slog.Info("ignore uid.", "username", account.Username, "mailbox", ld.Mailbox, "uid", num)
+				}
+			}
+		}
+
+		shd, err := client.UIDSearch(&imap.SearchCriteria{}, &imap.SearchOptions{ReturnAll: true}).Wait()
+		if err != nil {
+			slog.Error("uid search error.", "username", account.Username, "mailbox", ld.Mailbox, "err", err)
+			return err
+		}
+		var uids []imap.UID
+		for _, uid := range shd.AllUIDs() {
+			if !ignoreuids[uid] {
+				uids = append(uids, uid)
+			}
+		}
+
+		for _, uid := range uids {
+			var seq imap.UIDSet
+			seq.AddNum(uid)
 			opt := &imap.FetchOptions{
 				Envelope:    true,
 				RFC822Size:  true,
@@ -140,31 +162,33 @@ func archive(account *Account, dir string) error {
 				return err
 			}
 
-			for k, msg := range msgs {
-				seqno := i + uint32(k)
-				uid := msg.UID
+			for _, msg := range msgs {
+				if uid != msg.UID {
+					slog.Error("invalid uid.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "msg.uid", msg.UID)
+					continue
+				}
 				subject, err := dec.Decode(msg.Envelope.Subject)
 				if err != nil {
-					slog.Error("decode subject error.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", msg.Envelope.Subject, "err", err)
+					slog.Error("decode subject error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", msg.Envelope.Subject, "err", err)
 					return err
 				}
 				if len(msg.BodySection) != 1 {
-					slog.Error("body section error.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", subject, "bodysections", len(msg.BodySection))
+					slog.Error("body section error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "bodysections", len(msg.BodySection))
 					return fmt.Errorf("body section error")
 				}
 				var body []byte
 				for _, v := range msg.BodySection {
 					body = v
 				}
-				slog.Info("fetch success.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
+				slog.Info("fetch success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
 
 				name := filepath.Join(mailboxpath, fmt.Sprintf("%d-%s.eml", uid, subject))
 				err = os.WriteFile(name, body, 0644)
 				if err != nil {
-					slog.Error("write file error.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body), "err", err)
+					slog.Error("write file error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body), "err", err)
 					return err
 				}
-				slog.Info("write file success.", "username", account.Username, "mailbox", ld.Mailbox, "seqno", seqno, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
+				slog.Info("write file success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
 			}
 		}
 	}
