@@ -26,6 +26,7 @@ type Account struct {
 
 type Config struct {
 	Dir      string
+	Debug    bool
 	Accounts []*Account
 }
 
@@ -37,7 +38,7 @@ func main() {
 	}
 	for _, account := range config.Accounts {
 		slog.Info("archive start.", "username", account.Username)
-		err := archive(account, config.Dir)
+		err := archive(account, config.Dir, config.Debug)
 		if err != nil {
 			slog.Error("archive error.", "err", err, "username", account.Username)
 			return
@@ -59,7 +60,7 @@ func load() (*Config, error) {
 	return config, nil
 }
 
-func archive(account *Account, dir string) error {
+func archive(account *Account, dir string, debug bool) error {
 	path := filepath.Join(dir, account.Username)
 	err := os.MkdirAll(path, 0755)
 	if err != nil {
@@ -73,17 +74,19 @@ func archive(account *Account, dir string) error {
 			return charset.NewReaderLabel(charsetstr, input)
 		},
 	}
-	client, err := imapclient.DialTLS(account.Imap, nil)
+	var option *imapclient.Options
+	if debug {
+		option = &imapclient.Options{DebugWriter: os.Stdout}
+	}
+	client, err := imapclient.DialTLS(account.Imap, option)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer client.Close()
+	slog.Info("dial tls success.")
 
-	cs, err := client.Capability().Wait()
-	if err != nil {
-		return fmt.Errorf("capability: %w", err)
-	}
-	slog.Info("capability success.", "capabilities", cs)
+	client.WaitGreeting()
+	slog.Info("wait greeting success.")
 
 	err = client.Login(account.Username, account.Password).Wait()
 	if err != nil {
@@ -125,13 +128,14 @@ func archive(account *Account, dir string) error {
 			if entry.IsDir() {
 				continue
 			}
-			parts := strings.Split(entry.Name(), "-")
-			if len(parts) >= 2 {
-				num, err := strconv.ParseUint(parts[0], 10, 32)
-				if err == nil && num > 0 {
-					ignoreuids[imap.UID(num)] = true
-					slog.Info("ignore uid.", "username", account.Username, "mailbox", ld.Mailbox, "uid", num)
-				}
+			if filepath.Ext(entry.Name()) != ".eml" {
+				continue
+			}
+			uidstr := strings.TrimSuffix(entry.Name(), ".eml")
+			num, err := strconv.ParseUint(uidstr, 10, 32)
+			if err == nil && num > 0 {
+				ignoreuids[imap.UID(num)] = true
+				slog.Info("ignore uid.", "username", account.Username, "mailbox", ld.Mailbox, "uid", num)
 			}
 		}
 
@@ -167,7 +171,7 @@ func archive(account *Account, dir string) error {
 					slog.Error("invalid uid.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "msg.uid", msg.UID)
 					continue
 				}
-				subject, err := dec.Decode(msg.Envelope.Subject)
+				subject, err := dec.DecodeHeader(msg.Envelope.Subject)
 				if err != nil {
 					slog.Error("decode subject error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", msg.Envelope.Subject, "err", err)
 					return err
@@ -182,7 +186,7 @@ func archive(account *Account, dir string) error {
 				}
 				slog.Info("fetch success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
 
-				name := filepath.Join(mailboxpath, fmt.Sprintf("%d-%s.eml", uid, subject))
+				name := filepath.Join(mailboxpath, fmt.Sprintf("%d.eml", uid))
 				err = os.WriteFile(name, body, 0644)
 				if err != nil {
 					slog.Error("write file error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body), "err", err)
