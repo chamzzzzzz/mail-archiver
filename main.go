@@ -3,9 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,7 +11,6 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-	"golang.org/x/net/html/charset"
 )
 
 type Account struct {
@@ -67,12 +64,6 @@ func archive(account *Account, dir string, debug bool) error {
 		if !os.IsExist(err) {
 			return fmt.Errorf("mkdir: %w", err)
 		}
-	}
-
-	dec := &mime.WordDecoder{
-		CharsetReader: func(charsetstr string, input io.Reader) (io.Reader, error) {
-			return charset.NewReaderLabel(charsetstr, input)
-		},
 	}
 	var option *imapclient.Options
 	if debug {
@@ -155,7 +146,7 @@ func archive(account *Account, dir string, debug bool) error {
 			var seq imap.UIDSet
 			seq.AddNum(uid)
 			opt := &imap.FetchOptions{
-				Envelope:    true,
+				Envelope:    false,
 				RFC822Size:  true,
 				UID:         true,
 				BodySection: []*imap.FetchItemBodySection{{Peek: true}},
@@ -171,28 +162,23 @@ func archive(account *Account, dir string, debug bool) error {
 					slog.Error("invalid uid.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "msg.uid", msg.UID)
 					continue
 				}
-				subject, err := dec.DecodeHeader(msg.Envelope.Subject)
-				if err != nil {
-					slog.Error("decode subject error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", msg.Envelope.Subject, "err", err)
-					return err
-				}
 				if len(msg.BodySection) != 1 {
-					slog.Error("body section error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "bodysections", len(msg.BodySection))
+					slog.Error("body section error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "bodysections", len(msg.BodySection))
 					return fmt.Errorf("body section error")
 				}
 				var body []byte
 				for _, v := range msg.BodySection {
 					body = v
 				}
-				slog.Info("fetch success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
+				slog.Info("fetch success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "rfc822size", msg.RFC822Size, "bodysize", len(body))
 
 				name := filepath.Join(mailboxpath, fmt.Sprintf("%d.eml", uid))
 				err = os.WriteFile(name, body, 0644)
 				if err != nil {
-					slog.Error("write file error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body), "err", err)
+					slog.Error("write file error.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "rfc822size", msg.RFC822Size, "bodysize", len(body), "err", err)
 					return err
 				}
-				slog.Info("write file success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "subject", subject, "rfc822size", msg.RFC822Size, "bodysize", len(body))
+				slog.Info("write file success.", "username", account.Username, "mailbox", ld.Mailbox, "uid", uid, "rfc822size", msg.RFC822Size, "bodysize", len(body))
 			}
 		}
 	}

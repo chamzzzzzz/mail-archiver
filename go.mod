@@ -2,10 +2,7 @@ module github.com/chamzzzzzz/mail-archiver
 
 go 1.22.0
 
-require (
-	github.com/emersion/go-imap/v2 v2.0.0-beta.2
-	golang.org/x/net v0.6.0
-)
+require github.com/emersion/go-imap/v2 v2.0.0-beta.2
 
 require (
 	github.com/emersion/go-message v0.18.0 // indirect
