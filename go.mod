@@ -10,3 +10,5 @@ require (
 	github.com/emersion/go-textwrapper v0.0.0-20200911093747-65d896831594 // indirect
 	golang.org/x/text v0.14.0 // indirect
 )
+
+replace github.com/emersion/go-imap/v2 => github.com/x0st/go-imap/v2 v2.0.0-20240320130701-f9ce23121ff0

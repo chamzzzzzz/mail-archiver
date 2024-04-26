@@ -85,6 +85,13 @@ func archive(account *Account, dir string, debug bool) error {
 	}
 	slog.Info("login success.", "username", account.Username)
 
+	if client.Caps().Has(imap.CapID) {
+		if err := client.Id("name", "mail-archiver", "version", "1.0.0").Wait(); err != nil {
+			return fmt.Errorf("id: %w", err)
+		}
+		slog.Info("id success.")
+	}
+
 	lds, err := client.List("", "*", nil).Collect()
 	if err != nil {
 		return fmt.Errorf("list: %w", err)
@@ -130,7 +137,7 @@ func archive(account *Account, dir string, debug bool) error {
 			}
 		}
 
-		shd, err := client.UIDSearch(&imap.SearchCriteria{}, &imap.SearchOptions{ReturnAll: true}).Wait()
+		shd, err := client.UIDSearch(&imap.SearchCriteria{}, &imap.SearchOptions{}).Wait()
 		if err != nil {
 			slog.Error("uid search error.", "username", account.Username, "mailbox", ld.Mailbox, "err", err)
 			return err
